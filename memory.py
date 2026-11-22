@@ -11,8 +11,8 @@ from pathlib import Path
 
 TZ = timezone(timedelta(hours=8))
 FORMAT = "fishdeck-v1"
-CAP = 2000
-MAX_BYTES = 12_000_000
+DEFAULT_MAX_ENTRIES = 2000
+CONFIG_BYTES = 12_000_000
 KINDS = {"arrive", "start", "done", "agreement"}
 SOURCES = {"watch", "journal-copy", "fish-note"}
 FISH = re.compile(r"#[0-9]{1,16}$")
@@ -23,6 +23,16 @@ PRIVATE = re.compile(
 )
 JOURNAL = re.compile(r"^(?:[-*]\s*)?((?:[01][0-9]|2[0-3]):[0-5][0-9])(?:\s+|$)(.*)$")
 JOURNAL_PREFIX = re.compile(r"^(开始|完成|结束|抵达|到达)[：:]\s*(.+)$|^(到了.+)$")
+
+
+class RetentionError(ValueError):
+    pass
+
+
+def require_max_entries(value):
+    if type(value) is not int or (value != -1 and not 1 <= value <= 2**53 - 1):
+        raise RetentionError("记忆保留上限请填正整数，或者 -1（不设限）。")
+    return value
 
 
 def fish_id(value):
@@ -158,7 +168,7 @@ def verified_rows(bundle, fish):
     if not isinstance(bundle, dict) or bundle.get("format") != FORMAT or bundle.get("fish") != fish:
         raise ValueError("记忆文件格式不兼容或鱼编号不一致")
     entries = bundle.get("entries")
-    if not isinstance(entries, list) or len(entries) > CAP:
+    if not isinstance(entries, list):
         raise ValueError("记忆文件条数无效")
     result = []
     for item in entries:
@@ -185,20 +195,20 @@ def verified_rows(bundle, fish):
     return result
 
 
-def read_json(path):
+def read_json(path, byte_limit=CONFIG_BYTES):
     with path.open("rb") as f:
         if not stat.S_ISREG(os.fstat(f.fileno()).st_mode):
             raise ValueError("记忆文件不是普通文件")
-        content = f.read(MAX_BYTES + 1)
-    if len(content) > MAX_BYTES:
-        raise ValueError("记忆文件体积超出限制")
+        content = f.read() if byte_limit is None else f.read(byte_limit + 1)
+    if byte_limit is not None and len(content) > byte_limit:
+        raise ValueError("本地文件体积超出限制")
     return json.loads(content.decode("utf-8-sig"))
 
 
-def atomic_json(path, value):
+def atomic_json(path, value, byte_limit=CONFIG_BYTES):
     data = (json.dumps(value, ensure_ascii=False, separators=(",", ":")) + "\n").encode()
-    if len(data) > MAX_BYTES:
-        raise ValueError("记忆库体积超出限制")
+    if byte_limit is not None and len(data) > byte_limit:
+        raise ValueError("本地文件体积超出限制")
     path.parent.mkdir(parents=True, mode=0o700, exist_ok=True)
     fd, name = tempfile.mkstemp(dir=path.parent)
     tmp = Path(name)
@@ -221,13 +231,14 @@ def key(item):
 
 
 class Memory:
-    def __init__(self, root, fish):
+    def __init__(self, root, fish, max_entries=DEFAULT_MAX_ENTRIES):
         self.fish = require_fish(fish)
+        self.max_entries = require_max_entries(max_entries)
         self.path = Path(root) / f"{fish[1:]}.json"
 
     def load(self):
         try:
-            stored = read_json(self.path)
+            stored = read_json(self.path, byte_limit=None)
         except FileNotFoundError:
             return [], {}
         rows = verified_rows(stored, self.fish)
@@ -237,7 +248,7 @@ class Memory:
         return rows, watch
 
     def write(self, entries, watch):
-        atomic_json(self.path, {**self.bundle(entries), "watch": watch})
+        atomic_json(self.path, {**self.bundle(entries), "watch": watch}, byte_limit=None)
 
     def bundle(self, entries):
         return {"format": FORMAT, "fish": self.fish, "entries": entries}
@@ -245,6 +256,7 @@ class Memory:
     def merge(self, batch, watch=None):
         existing, before = self.load()
         entries = {key(item): item for item in existing}
+        old_keys = set(entries)
         for item in batch:
             fingerprint = key(item)
             previous = entries.get(fingerprint)
@@ -258,8 +270,23 @@ class Memory:
                 if people:
                     enriched["people"] = people
                 entries[fingerprint] = enriched
-        kept = sorted(entries.values(), key=lambda v: v["time"], reverse=True)[:CAP]
-        added = len({key(v) for v in kept} - {key(v) for v in existing})
+        ordered = sorted(
+            entries.items(), key=lambda pair: (pair[1]["time"], pair[0] not in old_keys),
+            reverse=True,
+        )
+        kept = []
+        added = 0
+        life = agreements = 0
+        for fingerprint, item in ordered:
+            is_agreement = item["kind"] == "agreement"
+            if self.max_entries != -1 and (agreements if is_agreement else life) >= self.max_entries:
+                continue
+            kept.append(item)
+            added += fingerprint not in old_keys
+            if is_agreement:
+                agreements += 1
+            else:
+                life += 1
         if kept != existing or (watch is not None and watch != before):
             self.write(kept, before if watch is None else watch)
         return added
@@ -273,11 +300,11 @@ class Memory:
 
     def export(self, path):
         rows, _ = self.load()
-        atomic_json(path, self.bundle(rows))
+        atomic_json(path, self.bundle(rows), byte_limit=None)
         return len(rows)
 
     def import_file(self, path):
-        return self.merge(verified_rows(read_json(path), self.fish))
+        return self.merge(verified_rows(read_json(path, byte_limit=None), self.fish))
 
     def clear(self):
         rows, watch = self.load()

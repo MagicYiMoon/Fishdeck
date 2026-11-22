@@ -1,5 +1,6 @@
 {
   "watch_key": {"description":"鱼的观看密钥","type":"string","default":"","hint":"填写官网 fwr_ 开头的只读观看密钥，勿发送到聊天。"},
   "auto_sync": {"description":"自动收集鱼世界生活事件","type":"bool","default":true,"hint":"绑定管理员私聊后，每两分钟读取一次官方观看接口。关闭时仍可手动同步。"},
-  "allow_agreement_write": {"description":"允许鱼自主记录约定","type":"bool","default":false,"hint":"仅绑定的主人私聊能调用写入工具。在主人同意后开启，只记鱼世界里双方确认的简短约定。"}
+  "allow_agreement_write": {"description":"允许鱼自主记录约定","type":"bool","default":false,"hint":"仅绑定的主人私聊能调用写入工具。在主人同意后开启，只记鱼世界里双方确认的简短约定。"},
+  "max_entries": {"description":"每条鱼的记忆保留上限","type":"int","default":2000,"hint":"生活记录和约定分别计数。填正整数，或填 -1 不设限。调小后在下次同步或写入时淘汰各类的最旧记录。"}
 }

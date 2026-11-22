@@ -3,8 +3,7 @@ import { randomUUID } from 'node:crypto'
 import { join, dirname } from 'node:path'
 
 export const FORMAT = 'fishdeck-v1'
-export const CAP = 2000
-export const MAX_BYTES = 12_000_000
+export const DEFAULT_MAX_ENTRIES = 2000
 const KINDS = ['arrive', 'start', 'done', 'agreement']
 const SOURCES = ['watch', 'journal-copy', 'fish-note']
 const FISH = /#[0-9]{1,16}$/
@@ -15,6 +14,13 @@ const JOURNAL = /^(?:[-*]\s*)?((?:[01][0-9]|2[0-3]):[0-5][0-9])(?:\s+|$)(.*)$/u
 const PREFIX = /^(开始|完成|结束|抵达|到达)[：:]\s*(.+)$|^(到了.+)$/u
 export const obj = x => x !== null && typeof x === 'object' && !Array.isArray(x)
 export const fishId = x => typeof x === 'string' ? x.trim().match(FISH)?.[0] ?? '' : ''
+export class RetentionError extends Error {}
+export function requireMaxEntries(value) {
+  if (!Number.isSafeInteger(value) || (value !== -1 && value < 1)) {
+    throw new RetentionError('记忆保留上限请填正整数，或者 -1（不设限）。')
+  }
+  return value
+}
 export function requireFish(x) {
   if (x !== fishId(x) || !x) throw new Error('请使用官方鱼编号，例如 #123')
   return x
@@ -96,10 +102,9 @@ export function readBounded(path, max) {
     return new TextDecoder('utf-8', { fatal: true }).decode(buffer)
   } finally { closeSync(fd) }
 }
-function readJson(path) { return JSON.parse(readBounded(path, MAX_BYTES)) }
+function readJson(path) { return JSON.parse(readBounded(path, Infinity)) }
 function writeJson(path, value) {
   const bytes = Buffer.from(JSON.stringify(value) + '\n')
-  if (bytes.length > MAX_BYTES) throw new Error('记忆文件体积超出限制')
   mkdirSync(dirname(path), { recursive: true, mode: 0o700 })
   const tmp = join(dirname(path), '.fishdeck-' + randomUUID())
   try {
@@ -110,7 +115,7 @@ function writeJson(path, value) {
 }
 function verifiedRows(value, fish) {
   if (!obj(value) || value.format !== FORMAT || value.fish !== fish) throw new Error('记忆文件格式不兼容或鱼编号不一致')
-  if (!Array.isArray(value.entries) || value.entries.length > CAP) throw new Error('记忆文件条数无效')
+  if (!Array.isArray(value.entries)) throw new Error('记忆文件条数无效')
   return value.entries.map(item => {
     if (!obj(item) || Object.keys(item).some(k => !['time', 'kind', 'text', 'source', 'place', 'people'].includes(k))) throw new Error('记忆条目格式无效')
     const entry = row(item.time, item.kind, item.text, item.source, item.place, item.people)
@@ -122,8 +127,9 @@ export const rowKey = item => JSON.stringify(item.kind === 'agreement'
   ? ['agreement', item.people[0], item.text.toLowerCase()]
   : [item.time, item.kind, (item.kind === 'arrive' ? item.text.replace(/^到了\s*(.+)$/u, '$1') : item.text).toLowerCase()])
 export class Memory {
-  constructor(root, fish) {
+  constructor(root, fish, maxEntries = DEFAULT_MAX_ENTRIES) {
     this.fish = requireFish(fish)
+    this.maxEntries = requireMaxEntries(maxEntries)
     this.path = join(root, fish.slice(1) + '.json')
   }
   load() {
@@ -139,18 +145,30 @@ export class Memory {
   merge(batch, watch) {
     const [existing, before] = this.load()
     const entries = new Map(existing.map(v => [rowKey(v), v]))
+    const prior = new Set(entries.keys())
     for (const item of batch) {
       const id = rowKey(item), previous = entries.get(id)
       if (!previous || item.source === 'watch' && previous.source !== 'watch') entries.set(id, item)
       else if (previous.source === item.source) {
         const people = [...new Set([...(previous.people ?? []), ...(item.people ?? [])])].slice(0, 20)
-        entries.set(id, { ...previous, ...(!previous.place && item.place ? { place: item.place } : {}), ...(people.length ? { people } : {}) })
+        if (people.length !== (previous.people?.length ?? 0) || (!previous.place && item.place)) {
+          entries.set(id, { ...previous, ...(!previous.place && item.place ? { place: item.place } : {}), ...(people.length ? { people } : {}) })
+        }
       }
     }
-    const kept = [...entries.values()].sort((a, b) => b.time - a.time).slice(0, CAP)
-    const prior = new Set(existing.map(rowKey))
-    const added = kept.reduce((n, item) => n + Number(!prior.has(rowKey(item))), 0)
-    if (JSON.stringify(kept) !== JSON.stringify(existing) || watch && JSON.stringify(watch) !== JSON.stringify(before)) this.write(kept, watch ?? before)
+    const ordered = [...entries].sort(([a, x], [b, y]) => y.time - x.time || Number(prior.has(a)) - Number(prior.has(b)))
+    const kept = []
+    let life = 0, agreements = 0, added = 0
+    for (const [id, item] of ordered) {
+      const isAgreement = item.kind === 'agreement'
+      if (this.maxEntries !== -1 && (isAgreement ? agreements : life) >= this.maxEntries) continue
+      kept.push(item)
+      if (!prior.has(id)) added++
+      if (isAgreement) agreements++
+      else life++
+    }
+    if (kept.length !== existing.length || kept.some((item, i) => item !== existing[i]) ||
+        watch && JSON.stringify(watch) !== JSON.stringify(before)) this.write(kept, watch ?? before)
     return added
   }
   rememberAgreement(peer, summary) {

@@ -88,3 +88,8 @@ class TestAstrHost(unittest.IsolatedAsyncioTestCase):
             plugin.config["allow_agreement_write"] = False
             self.assertIn(summary, await plugin.recall(owner, "#108", kind="agreement"))
             self.assertIn("尚未", await plugin.remember_agreement(owner, "#109", summary))
+            self.assertIn("约定 1/2000", await plugin._owner(owner, "状态", ""))
+            plugin.config["max_entries"] = -1
+            self.assertIn("约定 1/不限", await plugin._owner(owner, "状态", ""))
+            plugin.config["max_entries"] = 0
+            self.assertIn("请填正整数", await plugin.recall(owner, "#108", kind="agreement"))

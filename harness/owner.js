@@ -1,5 +1,5 @@
 import { join } from 'node:path'
-import { Memory, diaryRows, readBounded } from './memory.js'
+import { Memory, RetentionError, diaryRows, readBounded } from './memory.js'
 import { defaultDirectory } from './runtime.js'
 import { sync, watchRequest, validKey, WatchError } from './watch.js'
 
@@ -9,7 +9,10 @@ const usage = '用法：node owner.js status|export|import|diary|clear-confirm|s
 try {
   if (!['status', 'export', 'import', 'diary', 'clear-confirm', 'sync'].includes(action) || !fish) throw new Error(usage)
   const root = process.env.FISHDECK_DATA_DIR?.trim() || defaultDirectory()
-  const memory = new Memory(join(root, 'records'), fish)
+  // The offline CLI cannot read the active Profile, so pruning must be explicit here.
+  const configured = process.env.FISHDECK_MAX_ENTRIES?.trim()
+  const quota = configured ? (/^-?\d+$/.test(configured) ? Number(configured) : NaN) : -1
+  const memory = new Memory(join(root, 'records'), fish, quota)
   if (action === 'status') console.log(`${fish}：${memory.load()[0].length} 条`)
   else if (action === 'export' && file) console.log(`已导出 ${memory.exportFile(file)} 条`)
   else if (action === 'import' && file) console.log(`新增 ${memory.importFile(file)} 条`)
@@ -23,6 +26,7 @@ try {
     console.log(await sync(memory, key, (p, c) => watchRequest(key, p, c)))
   } else throw new Error(usage)
 } catch (error) {
-  console.error(error instanceof WatchError ? error.message : '操作未完成，请检查命令、鱼编号、文件或观看配置。\n' + usage)
+  console.error(error instanceof WatchError || error instanceof RetentionError
+    ? error.message : '操作未完成，请检查命令、鱼编号、文件或观看配置。\n' + usage)
   process.exitCode = 1
 }

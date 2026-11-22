@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import { mkdtempSync, rmSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
-import { Memory, diaryRows } from '../memory.js'
+import { Memory, RetentionError, diaryRows, row } from '../memory.js'
 import { sync } from '../watch.js'
 import { start } from '../runtime.js'
 
@@ -51,7 +51,7 @@ test('host isolates memory and requires owner opt-in for writing agreements', as
   t.after(() => disposers.reverse().forEach(d => d()))
   const fixture = new Memory(join(stateDirectory, 'records'), '#123')
   fixture.merge(diaryRows('00:05 开始：看电影\n00:06 私信：不可见', '2026-11-23'))
-  const config = { fish: '#123', sessionId: 'main', autoSync: false, stateDirectory }
+  const config = { fish: '#123', sessionId: 'main', autoSync: false, stateDirectory, maxEntries: -1 }
   const host = start(ctx, config, () => assert.fail('unexpected network request'))
   await host.tick()
   const tool = registered.get('fishdeck_recall')
@@ -79,4 +79,30 @@ test('host isolates memory and requires owner opt-in for writing agreements', as
   config.allowAgreementWrite = false
   assert.equal(write.execute(args, { agent: destination }).available, false)
   assert.equal(tool.execute({ kind: 'agreement' }, { agent: destination }).records.length, 1)
+  const status = registered.get('fishdeck_status').execute({}, { agent: destination })
+  assert.equal(status.maxEntries, -1)
+  assert.equal(status.lifeCount, 1)
+  assert.equal(status.agreementCount, 1)
+})
+
+test('custom quotas isolate agreements and trim only on write', t => {
+  const path = root(t)
+  for (const invalid of [0, -2, '100', 2.5, true, null]) {
+    assert.throws(() => new Memory(path, '#123', invalid), RetentionError)
+  }
+  assert.equal(new Memory(path, '#123').maxEntries, 2000)
+  const capped = new Memory(path, '#123', 1)
+  capped.merge([row(T, 'done', '浇菜', 'watch')], { cursor: 'known' })
+  capped.merge([
+    row(T + 60_000, 'done', '吃饭', 'watch'),
+    row(T + 60_000, 'agreement', '一起看电影', 'fish-note', '', ['#108']),
+  ])
+  assert.deepEqual(capped.search().map(item => item.text), ['吃饭', '一起看电影'])
+  assert.equal(capped.merge([row(T + 60_000, 'agreement', '一起种菜', 'fish-note', '', ['#108'])]), 1)
+  assert.equal(capped.search('', '', 'agreement')[0].text, '一起种菜')
+  new Memory(path, '#123', -1).merge([row(T + 120_000, 'done', '散步', 'watch')])
+  assert.equal(capped.load()[0].length, 3)
+  capped.merge([])
+  assert.deepEqual(capped.search().map(item => item.text), ['散步', '一起种菜'])
+  assert.equal(capped.load()[1].cursor, 'known')
 })

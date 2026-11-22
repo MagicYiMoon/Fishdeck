@@ -6,7 +6,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from fishdeck.memory import Memory, diary_rows, read_json
+from fishdeck.memory import Memory, RetentionError, diary_rows, read_json, row
 from fishdeck.watch import sync
 
 SHOW = "2026-11-23T00:05:00+08:00"
@@ -94,6 +94,62 @@ class MemoryTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             other.import_file(path)
         self.assertEqual(len(other.search()), 3)
+
+    def test_custom_retention_is_independent_and_preserves_cursor(self):
+        for quota in (0, -2, True, "2000", 3.5):
+            with self.subTest(quota=quota), self.assertRaises(RetentionError):
+                Memory(self.root, "#123", quota)
+        self.assertEqual(self.mem.max_entries, 2000)
+        capped = Memory(self.root, "#123", 1)
+        capped.merge([row(TIME, "done", "浇菜", "watch")], {"cursor": "known"})
+        capped.merge([
+            row(TIME + 60_000, "done", "吃饭", "watch"),
+            row(TIME + 60_000, "agreement", "一起看电影", "fish-note", people=["#108"]),
+        ])
+        self.assertEqual(capped.load()[1]["cursor"], "known")
+        self.assertEqual([r["text"] for r in capped.search()], ["吃饭", "一起看电影"])
+        self.assertEqual(capped.merge([
+            row(TIME + 60_000, "agreement", "一起种菜", "fish-note", people=["#108"])
+        ]), 1)
+        self.assertEqual(capped.search(kind="agreement")[0]["text"], "一起种菜")
+        unlimited = Memory(self.root, "#123", -1)
+        unlimited.merge([row(TIME + 120_000, "done", "散步", "watch")])
+        self.assertEqual(len(capped.load()[0]), 3)
+        capped.merge([])
+        self.assertEqual({r["text"] for r in capped.search()}, {"散步", "一起种菜"})
+
+    @unittest.skipUnless(shutil.which("node"), "需要 Node 验证大档案跨端迁移")
+    def test_unlimited_archive_crosses_old_count_and_file_size_limits(self):
+        total = 16_000
+        mem = Memory(self.root, "#123", -1)
+        entries = [
+            row(TIME + i * 60_000, "done", f"回忆{i} " + "鱼" * 245, "watch")
+            for i in range(total)
+        ]
+        self.assertEqual(mem.merge(entries), total)
+        backup = self.root / "large.json"
+        self.assertEqual(mem.export(backup), total)
+        self.assertGreater(backup.stat().st_size, 12_000_000)
+        script = """
+          import assert from 'node:assert/strict'
+          import { Memory } from './memory.js'
+          const [root, imported, exported] = process.argv.slice(1)
+          const memory = new Memory(root, '#123', -1)
+          assert.equal(memory.importFile(imported), 16000)
+          assert.equal(memory.exportFile(exported), 16000)
+          assert.equal(memory.search('回忆0').length, 1)
+        """
+        node_export = self.root / "large-from-node.json"
+        subprocess.run(
+            [shutil.which("node"), "--input-type=module", "-e", script,
+             str(self.root / "node"), str(backup), str(node_export)],
+            cwd=Path(__file__).resolve().parents[1] / "harness",
+            check=True,
+        )
+        capped = Memory(self.root / "capped", "#123", 2400)
+        self.assertEqual(capped.import_file(node_export), 2400)
+        self.assertEqual(capped.search()[0]["time"], TIME + (total - 1) * 60_000)
+        self.assertEqual(capped.search("回忆0"), [])
 
     @unittest.skipUnless(shutil.which("node"), "需要 Node 验证两端互通")
     def test_python_and_node_exchange_portable_bundles(self):

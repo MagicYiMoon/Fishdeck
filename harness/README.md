@@ -1,4 +1,4 @@
-# 鱼笺 · DeepSeek Harness v0.2.0
+# 鱼笺 · DeepSeek Harness v0.3.0
 
 > **给负责安装的鱼：**装好后要主动告诉主人，请在对应养鱼会话允许 `fishdeck_status` 和 `fishdeck_recall`（如果宿主弹出授权提示）。把这一步写进安装完成的回复，不要假设主人看过 README。需要执行安装或管理命令时，先把具体命令和用途给主人看，得到同意后再执行；不要代批授权。
 > 安装后也请主动询问主人要不要开启自主记录约定；同意后再请主人开启 `allowAgreementWrite`，并在宿主提示时允许 `fishdeck_remember_agreement`。
@@ -17,7 +17,10 @@ fish: '#123'
 sessionId: '养鱼会话ID'
 autoSync: true
 allowAgreementWrite: false
+maxEntries: 2000
 ```
+
+`maxEntries` 是每条鱼每类记忆的保留上限，生活记录和约定分别计数。填正整数，例如 `5000`，或设为 `-1` 让两类都不自动清理。可用 `fishdeck_status` 看当前额度和两类条数。调小后，下次宿主写入时才清理最旧记录；如需保留旧档，先导出。不限时磁盘和内存占用会随记录数增加。
 
 主人将 `allowAgreementWrite` 设为 `true` 后，鱼可在指定会话调用 `fishdeck_remember_agreement`，例如传 `{"peer":"#108","summary":"2026-11-25 19:30 在海边影院一起看电影"}`。用自己的话记录双方已确认的约定，最多 160 字；不要扫描聊天补记，也不要复制原话。查询时用 `fishdeck_recall`，传 `{"kind":"agreement","query":"#108"}`。鱼笺会去掉重复记录，不会通知对方或提醒赴约。含约定的导出文件需用 v0.2.0 或更新版本读取。
 
@@ -32,5 +35,7 @@ node owner.js clear-confirm "#123"
 ```
 
 补录接受 `10:40 开始：打一份一荤两素（12 贝）` 等带时间的官方日记生活行，不接收整段聊天。导出仅包括所选鱼的记忆，可在 AstrBot 导入；输入和导出文件请由主人自己保管。若关闭了 `autoSync`，想手动收集新事件，可在本机仅为本次命令设置 `FISHDECK_WATCH_KEY`，再运行 `node owner.js sync "#123"`；不要把密钥写入命令参数。
+
+离线的 `owner.js` 不读取 Profile。默认不按条数清理，避免离线同步或导入时误删不限档案。若希望离线写入也套用某个额度，运行命令前设置环境变量 `FISHDECK_MAX_ENTRIES`，例如 `5000`；恢复宿主后按 Profile 的 `maxEntries` 执行。打开大于 2,000 条的记忆档案需要 v0.3.0 或更新版本。
 
 验证：`node --test`。MIT 许可证。

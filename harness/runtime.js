@@ -1,6 +1,6 @@
 import { homedir } from 'node:os'
 import { join } from 'node:path'
-import { Memory } from './memory.js'
+import { Memory, RetentionError } from './memory.js'
 import { sync, validKey, watchRequest, WatchError } from './watch.js'
 
 export const defaultDirectory = () => join(process.env.DSH_HOME?.trim() || join(homedir(), '.dsh'), 'fishdeck')
@@ -9,8 +9,9 @@ export function start(ctx, config, request = watchRequest) {
   const fish = config.fish?.trim()
   const key = config.watchKey?.trim()
   const session = config.sessionId?.trim()
-  let memory
-  try { if (fish) memory = new Memory(join(directory, 'records'), fish) } catch {}
+  let memory, setupError = '请在 Profile 填写有效的官方鱼编号'
+  try { if (fish) memory = new Memory(join(directory, 'records'), fish, config.maxEntries) }
+  catch (error) { if (error instanceof RetentionError) setupError = error.message }
   const current = () => {
     try { return session ? ctx.agents.roots().find(a => a.id === session) : undefined }
     catch { return undefined }
@@ -36,7 +37,7 @@ export function start(ctx, config, request = watchRequest) {
       execute(args, exec) {
         const agent = current()
         if (!agent || exec?.agent !== agent) return { available: false, message: '只在主人配置的养鱼会话可用' }
-        if (!memory) return { available: false, message: '请在 Profile 填写有效的官方鱼编号' }
+        if (!memory) return { available: false, message: setupError }
         try { return fn(args ?? {}) }
         catch { return { available: false, message: '请检查查询参数和本地记忆库' } }
       },
@@ -62,10 +63,15 @@ export function start(ctx, config, request = watchRequest) {
       return { available: false, message: '约定未写入：请检查对方编号、摘要及本地记忆库' }
     }
   }, ['peer', 'summary'])
-  tool('fishdeck_status', '查看鱼笺本地记录数和同步状态。不发网络请求。', {}, () => ({
-    available: true, fish, count: memory.load()[0].length, watchKeyConfigured: validKey(key),
-    autoSync: config.autoSync !== false, allowAgreementWrite: config.allowAgreementWrite === true, lastSync: message,
-  }))
+  tool('fishdeck_status', '查看鱼笺本地记录数、保留上限和同步状态。不发网络请求。', {}, () => {
+    const [rows] = memory.load()
+    const agreementCount = rows.reduce((n, row) => n + Number(row.kind === 'agreement'), 0)
+    return {
+      available: true, fish, count: rows.length, lifeCount: rows.length - agreementCount, agreementCount,
+      maxEntries: memory.maxEntries, watchKeyConfigured: validKey(key), autoSync: config.autoSync !== false,
+      allowAgreementWrite: config.allowAgreementWrite === true, lastSync: message,
+    }
+  })
   ctx.effect(() => {
     const timer = setInterval(() => void tick(), 5000)
     timer.unref?.()

@@ -1,4 +1,5 @@
 import Schema from '@deepseek-ai/schemastery'
+import { DEFAULT_MAX_ENTRIES } from './memory.js'
 import { start } from './runtime.js'
 
 export const name = 'fishdeck-harness'
@@ -10,5 +11,6 @@ export const Config = Schema.object({
   stateDirectory: Schema.string().default('').description('留空使用 DSH_HOME 下的 fishdeck 目录。'),
   autoSync: Schema.boolean().default(true).description('已配置后每两分钟读观看接口，不调用 MCP。'),
   allowAgreementWrite: Schema.boolean().default(false).description('仅在主人同意后开启，允许鱼记录双方已确认的约定。'),
+  maxEntries: Schema.number().min(-1).default(DEFAULT_MAX_ENTRIES).description('生活记录和约定分别计数。填正整数，或填 -1 不设限。'),
 })
 export function apply(ctx, config) { start(ctx, config) }
