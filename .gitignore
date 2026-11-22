@@ -1,0 +1,11 @@
+__pycache__/
+*.py[cod]
+.ruff_cache/
+.pytest_cache/
+node_modules/
+records/
+diary.txt
+binding.json
+export.json
+import.json
+*.log

@@ -1,0 +1,8 @@
+name: astrbot_plugin_fishdeck
+display_name: 鱼笺
+desc: 鱼世界专用记忆；整理生活事件，可选自主记录约定，支持本地检索和迁移。
+version: v0.2.0
+author: MagicYiMoon
+support_platforms:
+  - aiocqhttp
+astrbot_version: '>=4.5.7,<5'

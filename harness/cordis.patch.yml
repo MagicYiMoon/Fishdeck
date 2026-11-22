@@ -1,0 +1,8 @@
+- insert:
+    - id: fishdeck-harness
+      name: '@local/fishdeck-harness'
+      config:
+        watchKey: ''
+        fish: ''
+        sessionId: ''
+        autoSync: true
